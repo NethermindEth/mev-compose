@@ -2,21 +2,7 @@
 pragma solidity ^0.8.19;
 
 import "../suave-geth/suave/sol/libraries/Suave.sol";
-
-
-struct LegacyTransaction {
-    uint64 nonce;
-    uint64 gasPrice;
-    uint64 gasLimit;
-    address to;
-    uint64 value;
-    bytes data;
-    bytes signature;
-}
-
-struct Bundle {
-    LegacyTransaction[] txs;
-}
+import "suave-std/Transactions.sol";
 
 library Verifier {
     function getMessageHash(
