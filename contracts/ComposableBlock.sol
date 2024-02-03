@@ -36,7 +36,7 @@ contract BasicBundleContract {
     }
 }
 
-contract PartialBlockContract {
+contract MetaBundleContract {
 
     struct MetaBundle {
         Suave.DataId[] bundleIds;
