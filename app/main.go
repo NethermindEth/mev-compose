@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"crypto/ecdsa"
+	"encoding/json"
 	"fmt"
 	"math/big"
 	"os"
@@ -86,6 +87,41 @@ func fundAccount(clt *sdk.Client, to common.Address, value *big.Int) error {
 	return nil
 }
 
+func DeployContract(artifact *Artifact, clt *sdk.Client) (*sdk.Contract, error) {
+	txnResult, err := sdk.DeployContract(artifact.Code, clt)
+
+	if err != nil {
+		return nil, err
+	}
+
+	receipt, err := txnResult.Wait()
+	if err != nil {
+		return nil, err
+	}
+
+	if receipt.Status == 0 {
+		return nil, fmt.Errorf("failed to deploy contract")
+	}
+
+	log.Info("Contract deployed", "address", receipt.ContractAddress.Hex())
+	return sdk.GetContract(receipt.ContractAddress, BasicBundleArtifact.Abi, clt), nil
+}
+
+func MakeBundle(txn1 *types.Transaction, txn2 *types.Transaction) ([]byte, error) {
+	txs := types.Transactions{txn1}
+
+	if txn2 != nil {
+		txs = append(txs, txn2)
+	}
+
+	bundle := &types.SBundle{
+		Txs: txs,
+	}
+
+	bundleBytes, err := json.Marshal(bundle)
+	return bundleBytes, err
+}
+
 func main() {
 	rpc, _ := rpc.Dial(exNodeNetAddr)
 	mevmClt := sdk.NewClient(rpc, fundedAccount.priv, exNodeEthAddr)
@@ -102,7 +138,9 @@ func main() {
 		ethTxnBackrun *types.Transaction
 	)
 
-	var mevShareContract *sdk.Contract
+	var basicBundleContract *sdk.Contract
+	var metaBundleContract *sdk.Contract
+	var blockBuilderContract *sdk.Contract
 
 	steps := []step{
 		{
@@ -137,24 +175,30 @@ func main() {
 			},
 		},
 		{
-			name: "Deploy contract",
+			name: "Deploy contracts",
 			action: func() error {
-				txnResult, err := sdk.DeployContract(MevShareBundleSenderContract.Code, mevmClt)
-
+				var err error
+				basicBundleContract, err = DeployContract(BasicBundleArtifact, mevmClt)
 				if err != nil {
 					return err
 				}
 
-				receipt, err := txnResult.Wait()
+				metaBundleContract, err = DeployContract(MetaBundleArtifact, mevmClt)
 				if err != nil {
 					return err
 				}
 
-				if receipt.Status == 0 {
-					return fmt.Errorf("failed to deploy contract")
+				blockBuilderContract, err = DeployContract(BlockBuilderArtifact, mevmClt)
+				if err != nil {
+					return err
 				}
 
-				log.Info("Contract deployed", "address", receipt.ContractAddress.Hex())
+				return nil
+			},
+		},
+		{
+			name: "Send eth bundles",
+			action: func() error {
 
 				return nil
 			},

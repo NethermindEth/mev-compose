@@ -135,18 +135,32 @@ contract MetaBundleContract {
     }
 }
 
-contract ComposableBlockContract {
+contract BlockBuilderContract {
+    address[] public allowedPeekers = [address(this), Suave.BUILD_ETH_BLOCK];
+    address[] public allowedStores = [];
 
-    struct PaymentTx {
-        address signer;
-        address to;
-        uint amount;
-        string message;
-        uint nonce;
-        bytes signature;
+    event NewBuilderBidEvent(
+        Suave.DataId dataId,
+        uint64 decryptionCondition,
+        address[] allowedPeekers,
+        bytes envelope
+    );
+
+    function emitNewBuilderBidEvent(Suave.DataRecord memory record, bytes memory envelope) public {
+        emit NewBuilderBidEvent(record.id, record.decryptionCondition, record.allowedPeekers, envelope);
     }
 
-    struct ConfidentialBuilderSession {
-        Suave.DataId bundleId;
+    function build(Suave.DataId[] memory dataIds, uint64 blockHeight) external returns (bytes memory) {
+        require(Suave.isConfidential());
+        Suave.DataRecord memory dataRecord = Suave.newDataRecord(blockHeight, allowedPeekers, allowedStores, "default:v0:mergedDataRecords");
+        Suave.confidentialStore(dataRecord.id, "default:v0:mergedDataRecords", abi.encode(dataIds));
+
+        Suave.BuildBlockArgs memory blockArgs;
+        (bytes memory builderBid, bytes memory envelope) = Suave.buildEthBlock(blockArgs, dataRecord.id, ""); // namespace not used.
+        Suave.DataRecord memory builderBidRecord = Suave.newDataRecord(blockNumber, addressList, addressList, "default:v0:builderBids");
+        Suave.confidentialStore(builderBidRecord.id, "default:v0:builderBids", builderBid);
+
+        return bytes.concat(this.emitNewBuilderBidEvent.selector, abi.encode(builderBidRecord, envelope));
+
     }
 }

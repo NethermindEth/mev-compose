@@ -12,14 +12,9 @@ import (
 )
 
 var (
-	MevShareContract             = newArtifact("bundles.sol/MevShareContract.json")
-	BundleContract               = newArtifact("bundles.sol/BundleContract.json")
-	EthBundleSenderContract      = newArtifact("bundles.sol/EthBundleSenderContract.json")
-	MevShareBundleSenderContract = newArtifact("bundles.sol/MevShareBundleSenderContract.json")
-	buildEthBlockContract        = newArtifact("bundles.sol/EthBlockContract.json")
-	ethBlockBidSenderContract    = newArtifact("bundles.sol/EthBlockBidSenderContract.json")
-	exampleCallSourceContract    = newArtifact("example.sol/ExampleEthCallSource.json")
-	exampleCallTargetContract    = newArtifact("example.sol/ExampleEthCallTarget.json")
+	BasicBundleArtifact  = newArtifact("ComposableBlock.sol/BasicBundleContract.json")
+	MetaBundleArtifact   = newArtifact("ComposableBlock.sol/MetaBundleContract.json")
+	BlockBuilderArtifact = newArtifact("ComposableBlock.sol/BlockBuilderContract.json")
 )
 
 func newArtifact(name string) *Artifact {
@@ -30,7 +25,7 @@ func newArtifact(name string) *Artifact {
 	callerDir := filepath.Dir(filename)
 
 	// Construct the absolute path to the target file.
-	targetFilePath := filepath.Join(callerDir, "../artifacts", name)
+	targetFilePath := filepath.Join(callerDir, "../out", name)
 
 	data, err := os.ReadFile(targetFilePath)
 	if err != nil {
