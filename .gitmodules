@@ -1,6 +1,0 @@
-[submodule "suave-geth"]
-	path = suave-geth
-	url = git@github.com:flashbots/suave-geth.git
-[submodule "lib/suave-std"]
-	path = lib/suave-std
-	url = https://github.com/flashbots/suave-std
