@@ -47,6 +47,8 @@ contract MetaBundleContract {
     event HintEvent(Suave.DataId dataId, uint64 decryptionCondition, address[] allowedPeekers, MetaBundle metaBundle);
     event MatchEvent(Suave.DataId dataId, uint64 decryptionCondition, address[] allowedPeekers);
 
+    address[] public allowedPeekers = [address(this), Suave.BUILD_ETH_BLOCK];
+
     function newMetaBundle(
         uint64 decryptionCondition,
         address[] memory dataAllowedPeekers,
@@ -117,14 +119,14 @@ contract MetaBundleContract {
         bytes memory bundleIdsData = Suave.confidentialRetrieve(dataId, "default:v0:ethMetaBundles");
         Suave.DataId[] memory bundleIds = abi.decode(bundleIdsData, (Suave.DataId[]));
         Suave.DataRecord memory dataRecord = Suave.newDataRecord(
-            decryptionCondition, dataAllowedPeekers, dataAllowedStores, "default:v0:matchMetaBundles");
+            decryptionCondition, dataAllowedPeekers, dataAllowedStores, "default:v0:mergedDataRecords");
         Suave.DataId[] memory dataRecords = new Suave.DataId[](bundleIds.length + 1);
 
         for (uint256 i = 0; i < bundleIds.length; i++) {
             dataRecords[i] = bundleIds[i];
         }
         dataRecords[bundleIds.length] = paymentBundleDataRecord.id;
-        Suave.confidentialStore(dataRecord.id, "default:v0:matchMetaBundles", abi.encode(dataRecords));
+        Suave.confidentialStore(dataRecord.id, "default:v0:mergedDataRecords", abi.encode(dataRecords));
 
         // emit event
         return bytes.concat(this.emitMatch.selector, abi.encode(dataRecord));
