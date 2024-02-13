@@ -96,7 +96,7 @@ contract MetaBundleContract {
         // Parse payment bundle.
         bytes memory paymentBundleData = Suave.confidentialInputs();
         Bundle.BundleObj memory paymentBundleObj = abi.decode(paymentBundleData, (Bundle.BundleObj));
-        bytes memory paymentBundleJson = Bundle.jsonify(paymentBundleObj);
+        bytes memory paymentBundleJson = Bundle.encodeBundle(paymentBundleObj).body;
 
         require(paymentBundleObj.txns.length == 1, "Payment bundle must contain exactly one transaction");
         Transactions.EIP155 memory paymentTx = Transactions.decodeRLP_EIP155(paymentBundleObj.txns[0]);
@@ -137,7 +137,7 @@ contract MetaBundleContract {
 
 contract BlockBuilderContract {
     address[] public allowedPeekers = [address(this), Suave.BUILD_ETH_BLOCK];
-    address[] public allowedStores = [];
+    address[] public allowedStores;
 
     event NewBuilderBidEvent(
         Suave.DataId dataId,
@@ -150,14 +150,14 @@ contract BlockBuilderContract {
         emit NewBuilderBidEvent(record.id, record.decryptionCondition, record.allowedPeekers, envelope);
     }
 
-    function build(Suave.DataId[] memory dataIds, uint64 blockHeight, string memory boostRelayUrl) external returns (bytes memory) {
+    function build(Suave.DataId[] memory dataIds, uint64 blockNumber, string memory boostRelayUrl) external returns (bytes memory) {
         require(Suave.isConfidential());
-        Suave.DataRecord memory dataRecord = Suave.newDataRecord(blockHeight, allowedPeekers, allowedStores, "default:v0:mergedDataRecords");
+        Suave.DataRecord memory dataRecord = Suave.newDataRecord(blockNumber, allowedPeekers, allowedStores, "default:v0:mergedDataRecords");
         Suave.confidentialStore(dataRecord.id, "default:v0:mergedDataRecords", abi.encode(dataIds));
 
         Suave.BuildBlockArgs memory blockArgs;
         (bytes memory builderBid, bytes memory envelope) = Suave.buildEthBlock(blockArgs, dataRecord.id, ""); // namespace not used.
-        Suave.DataRecord memory builderBidRecord = Suave.newDataRecord(blockNumber, addressList, addressList, "default:v0:builderBids");
+        Suave.DataRecord memory builderBidRecord = Suave.newDataRecord(blockNumber, allowedPeekers, allowedStores, "default:v0:builderBids");
         Suave.confidentialStore(builderBidRecord.id, "default:v0:builderBids", builderBid);
         Suave.submitEthBlockToRelay(boostRelayUrl, builderBid);
         return bytes.concat(this.emitNewBuilderBidEvent.selector, abi.encode(builderBidRecord, envelope));

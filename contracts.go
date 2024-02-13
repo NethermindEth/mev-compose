@@ -8,7 +8,9 @@ import (
 	"runtime"
 
 	"github.com/ethereum/go-ethereum/accounts/abi"
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/ethereum/go-ethereum/core/types"
 )
 
 var (
@@ -25,7 +27,7 @@ func newArtifact(name string) *Artifact {
 	callerDir := filepath.Dir(filename)
 
 	// Construct the absolute path to the target file.
-	targetFilePath := filepath.Join(callerDir, "../out", name)
+	targetFilePath := filepath.Join(callerDir, "./out", name)
 
 	data, err := os.ReadFile(targetFilePath)
 	if err != nil {
@@ -56,4 +58,65 @@ type Artifact struct {
 	Abi          *abi.ABI
 	DeployedCode []byte
 	Code         []byte
+}
+
+type MetaBundle struct {
+	BundleIds [][16]byte
+	Value     uint64
+	Address   common.Address
+}
+
+type MetaBundleHintEvent struct {
+	DataID              [16]byte
+	DecryptionCondition uint64
+	AllowedPeekers      []common.Address
+	MetaBundle          MetaBundle
+}
+
+func (b *MetaBundleHintEvent) Unpack(log *types.Log) error {
+	unpacked, err := MetaBundleArtifact.Abi.Events["HintEvent"].Inputs.Unpack(log.Data)
+	if err != nil {
+		return err
+	}
+	b.DataID = unpacked[0].([16]byte)
+	b.DecryptionCondition = unpacked[1].(uint64)
+	b.AllowedPeekers = unpacked[2].([]common.Address)
+	b.MetaBundle = unpacked[3].(MetaBundle)
+	return nil
+}
+
+type MetaBundleMatchEvent struct {
+	DataID              [16]byte
+	DecryptionCondition uint64
+	AllowedPeekers      []common.Address
+}
+
+func (b *MetaBundleMatchEvent) Unpack(log *types.Log) error {
+	unpacked, err := MetaBundleArtifact.Abi.Events["MatchEvent"].Inputs.Unpack(log.Data)
+	if err != nil {
+		return err
+	}
+	b.DataID = unpacked[0].([16]byte)
+	b.DecryptionCondition = unpacked[1].(uint64)
+	b.AllowedPeekers = unpacked[2].([]common.Address)
+	return nil
+}
+
+type NewBuilderBidEvent struct {
+	DataID              [16]byte
+	DecryptionCondition uint64
+	AllowedPeekers      []common.Address
+	Envelope            []byte
+}
+
+func (b *NewBuilderBidEvent) Unpack(log *types.Log) error {
+	unpacked, err := BlockBuilderArtifact.Abi.Events["NewBuilderBidEvent"].Inputs.Unpack(log.Data)
+	if err != nil {
+		return err
+	}
+	b.DataID = unpacked[0].([16]byte)
+	b.DecryptionCondition = unpacked[1].(uint64)
+	b.AllowedPeekers = unpacked[2].([]common.Address)
+	b.Envelope = unpacked[3].([]byte)
+	return nil
 }
