@@ -148,18 +148,56 @@ contract BlockBuilderContract {
         bytes envelope
     );
 
+    struct BundleDataId {
+        Suave.DataId dataId;
+        bool isMetaBundle;
+    }
+
     function emitNewBuilderBidEvent(Suave.DataRecord memory record, bytes memory envelope) public {
         emit NewBuilderBidEvent(record.id, record.decryptionCondition, record.allowedPeekers, envelope);
     }
 
-    function build(Suave.DataId[] memory dataIds, uint64 blockNumber, string memory boostRelayUrl) external returns (bytes memory) {
+    // Merges bundles and meta bundles.
+    function mergeBundles(BundleDataId[] memory bundleDataIds, uint64 blockNumber) internal returns (Suave.DataRecord memory) {
+        uint256 totalLength = 0;
+        for (uint256 i = 0; i < bundleDataIds.length; i++) {
+            if (bundleDataIds[i].isMetaBundle) {
+                bytes memory record = Suave.confidentialRetrieve(bundleDataIds[i].dataId, "default:v0:mergedDataRecords");
+                Suave.DataId[] memory ids = abi.decode(record, (Suave.DataId[]));
+                totalLength += ids.length;
+            } else {
+                totalLength += 1;
+            }
+        }
+
+        Suave.DataId[] memory bundleIds = new Suave.DataId[](totalLength);
+        for (uint256 i = 0; i < bundleDataIds.length; i++) {
+            if (bundleDataIds[i].isMetaBundle) {
+                bytes memory record = Suave.confidentialRetrieve(bundleDataIds[i].dataId, "default:v0:mergedDataRecords");
+                Suave.DataId[] memory ids = abi.decode(record, (Suave.DataId[]));
+                for (uint256 j = 0; j < ids.length; j++) {
+                    bundleIds[bundleIds.length] = ids[j];
+                }
+            } else {
+                bundleIds[bundleIds.length] = bundleDataIds[i].dataId;
+            }
+        }
+        Suave.DataRecord memory dataRecord = Suave.newDataRecord(
+            blockNumber, allowedPeekers, allowedStores, "default:v0:mergedDataRecords");
+        Suave.confidentialStore(dataRecord.id, "default:v0:mergedDataRecords", abi.encode(bundleIds));
+        return dataRecord;
+    }
+
+    function build(
+            BundleDataId[] memory bundleDataIds, uint64 blockNumber, string memory boostRelayUrl) external returns (bytes memory) {
         require(Suave.isConfidential());
-        Suave.DataRecord memory dataRecord = Suave.newDataRecord(blockNumber, allowedPeekers, allowedStores, "default:v0:mergedDataRecords");
-        Suave.confidentialStore(dataRecord.id, "default:v0:mergedDataRecords", abi.encode(dataIds));
+        Suave.DataRecord memory mergedBundleDataRecord = mergeBundles(bundleDataIds, blockNumber);
 
         Suave.BuildBlockArgs memory blockArgs;
-        (bytes memory builderBid, bytes memory envelope) = Suave.buildEthBlock(blockArgs, dataRecord.id, ""); // namespace not used.
-        Suave.DataRecord memory builderBidRecord = Suave.newDataRecord(blockNumber, allowedPeekers, allowedStores, "default:v0:builderBids");
+        (bytes memory builderBid, bytes memory envelope) = Suave.buildEthBlock(
+            blockArgs, mergedBundleDataRecord.id, ""); // namespace not used.
+        Suave.DataRecord memory builderBidRecord = Suave.newDataRecord(
+            blockNumber, allowedPeekers, allowedStores, "default:v0:builderBids");
         Suave.confidentialStore(builderBidRecord.id, "default:v0:builderBids", builderBid);
         Suave.submitEthBlockToRelay(boostRelayUrl, builderBid);
         return bytes.concat(this.emitNewBuilderBidEvent.selector, abi.encode(builderBidRecord, envelope));
