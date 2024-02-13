@@ -150,7 +150,7 @@ contract BlockBuilderContract {
         emit NewBuilderBidEvent(record.id, record.decryptionCondition, record.allowedPeekers, envelope);
     }
 
-    function build(Suave.DataId[] memory dataIds, uint64 blockHeight) external returns (bytes memory) {
+    function build(Suave.DataId[] memory dataIds, uint64 blockHeight, string memory boostRelayUrl) external returns (bytes memory) {
         require(Suave.isConfidential());
         Suave.DataRecord memory dataRecord = Suave.newDataRecord(blockHeight, allowedPeekers, allowedStores, "default:v0:mergedDataRecords");
         Suave.confidentialStore(dataRecord.id, "default:v0:mergedDataRecords", abi.encode(dataIds));
@@ -159,8 +159,7 @@ contract BlockBuilderContract {
         (bytes memory builderBid, bytes memory envelope) = Suave.buildEthBlock(blockArgs, dataRecord.id, ""); // namespace not used.
         Suave.DataRecord memory builderBidRecord = Suave.newDataRecord(blockNumber, addressList, addressList, "default:v0:builderBids");
         Suave.confidentialStore(builderBidRecord.id, "default:v0:builderBids", builderBid);
-
+        Suave.submitEthBlockToRelay(boostRelayUrl, builderBid);
         return bytes.concat(this.emitNewBuilderBidEvent.selector, abi.encode(builderBidRecord, envelope));
-
     }
 }
