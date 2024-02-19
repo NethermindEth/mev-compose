@@ -6,6 +6,7 @@ replace github.com/ethereum/go-ethereum => github.com/flashbots/suave-geth v0.1.
 
 require (
 	github.com/ethereum/go-ethereum v0.0.0-00010101000000-000000000000
+	github.com/inconshreveable/log15 v2.16.0+incompatible
 	github.com/umbracle/ethgo v0.1.3
 )
 
@@ -19,6 +20,8 @@ require (
 	github.com/google/gofuzz v1.2.0 // indirect
 	github.com/gorilla/websocket v1.4.2 // indirect
 	github.com/holiman/uint256 v1.2.3 // indirect
+	github.com/mattn/go-colorable v0.1.13 // indirect
+	github.com/mattn/go-isatty v0.0.18 // indirect
 	github.com/mitchellh/mapstructure v1.5.0 // indirect
 	github.com/shirou/gopsutil v3.21.4-0.20210419000835-c7a38de76ee5+incompatible // indirect
 	github.com/tklauser/go-sysconf v0.3.5 // indirect
@@ -27,5 +30,6 @@ require (
 	github.com/valyala/fastjson v1.4.1 // indirect
 	golang.org/x/crypto v0.13.0 // indirect
 	golang.org/x/sys v0.12.0 // indirect
+	golang.org/x/term v0.12.0 // indirect
 	gopkg.in/natefinch/npipe.v2 v2.0.0-20160621034901-c1b8fa8bdcce // indirect
 )

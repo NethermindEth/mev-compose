@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -61,9 +62,15 @@ type Artifact struct {
 }
 
 type MetaBundle struct {
-	BundleIds [][16]byte
-	Value     uint64
-	Address   common.Address
+	BundleIds    [][16]byte     `json:"bundleIds"`
+	Value        *big.Int       `json:"value"`
+	FeeRecipient common.Address `json:"feeRecipient"`
+}
+
+type MBundle struct {
+	BundleIds    [][16]byte     `json:"bundleIds"`
+	Value        uint64         `json:"value"`
+	FeeRecipient common.Address `json:"feeRecipient"`
 }
 
 type MetaBundleHintEvent struct {
@@ -81,7 +88,12 @@ func (b *MetaBundleHintEvent) Unpack(log *types.Log) error {
 	b.DataID = unpacked[0].([16]byte)
 	b.DecryptionCondition = unpacked[1].(uint64)
 	b.AllowedPeekers = unpacked[2].([]common.Address)
-	b.MetaBundle = unpacked[3].(MetaBundle)
+	tempStruct := unpacked[3].(struct {
+		BundleIds    [][16]byte     `json:"bundleIds"`
+		Value        *big.Int       `json:"value"`
+		FeeRecipient common.Address `json:"feeRecipient"`
+	})
+	b.MetaBundle = MetaBundle(tempStruct)
 	return nil
 }
 
@@ -118,5 +130,22 @@ func (b *NewBuilderBidEvent) Unpack(log *types.Log) error {
 	b.DecryptionCondition = unpacked[1].(uint64)
 	b.AllowedPeekers = unpacked[2].([]common.Address)
 	b.Envelope = unpacked[3].([]byte)
+	return nil
+}
+
+type HintEvent struct {
+	DataID              [16]byte
+	DecryptionCondition uint64
+	AllowedPeekers      []common.Address
+}
+
+func (b *HintEvent) Unpack(log *types.Log) error {
+	unpacked, err := BasicBundleArtifact.Abi.Events["HintEvent"].Inputs.Unpack(log.Data)
+	if err != nil {
+		return err
+	}
+	b.DataID = unpacked[0].([16]byte)
+	b.DecryptionCondition = unpacked[1].(uint64)
+	b.AllowedPeekers = unpacked[2].([]common.Address)
 	return nil
 }

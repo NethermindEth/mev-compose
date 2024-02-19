@@ -8,24 +8,25 @@ import (
 	"math/big"
 	"os"
 
+	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
-	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/ethereum/go-ethereum/suave/sdk"
+	log "github.com/inconshreveable/log15"
 	"github.com/umbracle/ethgo/abi"
 )
 
 var (
-	exNodeEthAddr = common.HexToAddress("b5feafbdd752ad52afb7e1bd2e40432a485bbb7f")
+	kettleAddress = common.HexToAddress("b5feafbdd752ad52afb7e1bd2e40432a485bbb7f")
 	exNodeNetAddr = "http://localhost:8545"
 
-	L1NetAddr = "http://localhost:9545"
+	L1NetAddr = "http://localhost:8555"
 
 	// This account is funded in both devnev networks
-	// address: 0xBE69d72ca5f88aCba033a063dF5DBe43a4148De0
-	fundedAccount = newPrivKeyFromHex("91ab9a7e53c220e6210460b65a7a3bb2ca181412a8a7b43ff336b3df1737ce12")
+	// address: 0xb5feafbdd752ad52afb7e1bd2e40432a485bbb7f
+	fundedAccount = newPrivKeyFromHex("6c45335a22461ccdb978b78ab61b238bad2fae4544fb55c14eb096c875ccfc52")
 )
 
 type step struct {
@@ -102,7 +103,7 @@ func DeployContract(artifact *Artifact, clt *sdk.Client) (*sdk.Contract, error) 
 	}
 
 	log.Info("Contract deployed", "address", receipt.ContractAddress.Hex())
-	return sdk.GetContract(receipt.ContractAddress, BasicBundleArtifact.Abi, clt), nil
+	return sdk.GetContract(receipt.ContractAddress, artifact.Abi, clt), nil
 }
 
 func MakeBundle(txn1 *types.Transaction, txn2 *types.Transaction) ([]byte, error) {
@@ -120,25 +121,71 @@ func MakeBundle(txn1 *types.Transaction, txn2 *types.Transaction) ([]byte, error
 	return bundleBytes, err
 }
 
+func SignTxnWithNonce(
+	client *sdk.Client,
+	txn *types.LegacyTx,
+) (*types.Transaction, error) {
+	if txn.Nonce == 0 {
+		nonce, err := client.RPC().PendingNonceAt(context.Background(), client.Addr())
+		if err != nil {
+			return nil, err
+		}
+		txn.Nonce = nonce
+	}
+
+	if txn.GasPrice == nil {
+		gasPrice, err := client.RPC().SuggestGasPrice(context.Background())
+		if err != nil {
+			return nil, err
+		}
+		txn.GasPrice = gasPrice
+	}
+
+	if txn.Gas == 0 {
+		estimateMsg := ethereum.CallMsg{
+			From:     client.Addr(),
+			To:       txn.To,
+			GasPrice: txn.GasPrice,
+			Value:    txn.Value,
+			Data:     txn.Data,
+		}
+		gasLimit, err := client.RPC().EstimateGas(context.Background(), estimateMsg)
+		if err != nil {
+			return nil, err
+		}
+		txn.Gas = gasLimit
+	}
+
+	signed, err := client.SignTxn(txn)
+	if err != nil {
+		return nil, err
+	}
+	return signed, nil
+}
+
 func SendBundle(
 	client1 *sdk.Client,
 	client2 *sdk.Client,
 	targetAddr common.Address,
 	targetBlock uint64,
 	bundleContract *sdk.Contract) (*[16]byte, error) {
-	ethTxn1, _ := client1.SignTxn(&types.LegacyTx{
-		To:       &targetAddr,
-		Value:    big.NewInt(1000),
-		Gas:      21000,
-		GasPrice: big.NewInt(13),
+	ethTxn1, err := SignTxnWithNonce(client1, &types.LegacyTx{
+		To:    &targetAddr,
+		Value: big.NewInt(1000),
 	})
 
-	ethTxnBackrun, _ := client2.SignTxn(&types.LegacyTx{
-		To:       &targetAddr,
-		Value:    big.NewInt(1000),
-		Gas:      21420,
-		GasPrice: big.NewInt(13),
+	if err != nil {
+		return nil, err
+	}
+
+	ethTxnBackrun, err := SignTxnWithNonce(client2, &types.LegacyTx{
+		To:    &targetAddr,
+		Value: big.NewInt(1000),
 	})
+
+	if err != nil {
+		return nil, err
+	}
 
 	bundleBytes, _ := MakeBundle(ethTxn1, ethTxnBackrun)
 	allowedPeekers := []common.Address{bundleContract.Address()}
@@ -175,24 +222,39 @@ func SendMetaBundle(
 	targetBlock uint64,
 	metaBundleContract *sdk.Contract,
 	bundleIds [][16]byte,
-	value uint64,
+	value *big.Int,
 	address common.Address,
 ) (*MetaBundleHintEvent, error) {
-	ethTxn1, _ := client.SignTxn(&types.LegacyTx{
+	ethTxn1, err := SignTxnWithNonce(client, &types.LegacyTx{
 		To:       &to,
 		Value:    big.NewInt(1000),
 		Gas:      21000,
 		GasPrice: big.NewInt(13),
 	})
+	if err != nil {
+		return nil, err
+	}
 
-	bundleBytes, _ := MakeBundle(ethTxn1, nil)
-	allowedPeekers := []common.Address{metaBundleContract.Address()}
-	confidentialDataBytes, _ := PackToBytes(bundleBytes)
+	bundleBytes, err := MakeBundle(ethTxn1, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	confidentialDataBytes, err := MetaBundleArtifact.Abi.Methods["newMetaBundle"].Outputs.Pack(bundleBytes)
+	if err != nil {
+		return nil, err
+	}
+	metaBundle := MetaBundle{
+		BundleIds:    bundleIds,
+		Value:        value,
+		FeeRecipient: address,
+	}
+
 	txnResult, err := metaBundleContract.SendTransaction("newMetaBundle",
-		[]interface{}{targetBlock, allowedPeekers, []common.Address{}, []interface{}{
-			bundleIds, value, address,
-		}}, confidentialDataBytes)
-
+		[]interface{}{targetBlock, metaBundle}, confidentialDataBytes)
+	if err != nil {
+		return nil, err
+	}
 	receipt, err := txnResult.Wait()
 	if err != nil {
 		return nil, err
@@ -217,7 +279,6 @@ func SendMetaBundleMatch(
 	client *sdk.Client,
 	targetBlock uint64,
 	metaBundleContract *sdk.Contract,
-	blockBuilderContract *sdk.Contract,
 	dataId [16]byte,
 	value *big.Int,
 	feeRecipient common.Address,
@@ -229,12 +290,23 @@ func SendMetaBundleMatch(
 		GasPrice: big.NewInt(13),
 	})
 
-	bundleBytes, _ := MakeBundle(paymentTx, nil)
+	bundleBytes, err := MakeBundle(paymentTx, nil)
+
+	if err != nil {
+		return nil, err
+	}
+
 	// Set the paid metabundle peekable to builder contract
-	allowedPeekers := []common.Address{metaBundleContract.Address(), blockBuilderContract.Address()}
-	confidentialDataBytes, _ := PackToBytes(bundleBytes)
-	txnResult, err := metaBundleContract.SendTransaction("newMatch",
-		[]interface{}{targetBlock, allowedPeekers, []common.Address{}, dataId}, confidentialDataBytes)
+	confidentialDataBytes, err := PackToBytes(bundleBytes)
+	if err != nil {
+		return nil, err
+	}
+
+	txnResult, err := metaBundleContract.SendTransaction("newMatch", []interface{}{targetBlock, dataId}, confidentialDataBytes)
+
+	if err != nil {
+		return nil, err
+	}
 
 	receipt, err := txnResult.Wait()
 	if err != nil {
@@ -262,7 +334,7 @@ func SendBlock(
 	dataIds [][16]byte,
 ) error {
 	txnResult, err := blockBuilderContract.SendTransaction("build",
-		[]interface{}{dataIds, targetBlock}, nil)
+		[]interface{}{dataIds, targetBlock, "http://localhost:18550"}, nil)
 
 	receipt, err := txnResult.Wait()
 	if err != nil {
@@ -293,8 +365,9 @@ func PackToBytes(data []byte) ([]byte, error) {
 }
 
 func main() {
+	log.Info("Starting PoC")
 	mevmRpc, _ := rpc.Dial(exNodeNetAddr)
-	mevmClt := sdk.NewClient(mevmRpc, fundedAccount.priv, exNodeEthAddr)
+	mevmClt := sdk.NewClient(mevmRpc, fundedAccount.priv, kettleAddress)
 	ethRpc, _ := rpc.Dial(L1NetAddr)
 	ethClt := sdk.NewClient(ethRpc, fundedAccount.priv, common.Address{})
 
@@ -318,7 +391,11 @@ func main() {
 				testAddr1 = generatePrivKey()
 				testAddr2 = generatePrivKey()
 
-				fundBalance := big.NewInt(100000000)
+				log.Info("Test account 1", "address", testAddr1.Address().Hex())
+				log.Info("Test account 2", "address", testAddr2.Address().Hex())
+
+				fundBalance := new(big.Int)
+				fundBalance.Exp(big.NewInt(10), big.NewInt(18), nil)
 
 				if err := fundAccount(ethClt, testAddr1.Address(), fundBalance); err != nil {
 					return err
@@ -358,17 +435,20 @@ func main() {
 			action: func() error {
 				client1 := sdk.NewClient(ethRpc, testAddr1.priv, common.Address{})
 				client2 := sdk.NewClient(ethRpc, testAddr2.priv, common.Address{})
-				to := testAddr1.Address()
 				targetblock := uint64(1)
 
 				// Start sending bundles
 				for i := 0; i < 10; i++ {
+					log.Info("Sending bundle", "i", i)
+					to := generatePrivKey().Address()
 					dataId, err := SendBundle(client1, client2, to, targetblock, basicBundleContract)
 					if err != nil {
 						return err
 					}
 					bundleDataIds = append(bundleDataIds, *dataId)
 				}
+
+				log.Info("Bundle data ids", "ids", bundleDataIds)
 
 				return nil
 			},
@@ -380,15 +460,19 @@ func main() {
 				to := testAddr1.Address()
 				targetBlock := uint64(1)
 
+				log.Info("Sending meta bundle 1: ", "ids", bundleDataIds[0:3])
+
 				metaBundleHint, err := SendMetaBundle(
-					client, to, targetBlock, metaBundleContract, bundleDataIds[0:3], 1000, testAddr1.Address())
+					client, to, targetBlock, metaBundleContract, bundleDataIds[0:3], big.NewInt(1000), testAddr1.Address())
 				if err != nil {
 					return err
 				}
 				metaBundleHints = append(metaBundleHints, metaBundleHint)
 
+				log.Info("Sending meta bundle 2: ", "ids", bundleDataIds[5:8])
+
 				metaBundleHint, err = SendMetaBundle(
-					client, to, targetBlock, metaBundleContract, bundleDataIds[5:7], 1000, testAddr1.Address())
+					client, to, targetBlock, metaBundleContract, bundleDataIds[5:8], big.NewInt(1000), testAddr1.Address())
 
 				if err != nil {
 					return err
@@ -405,14 +489,14 @@ func main() {
 				targetBlock := uint64(1)
 
 				for _, hint := range metaBundleHints {
+					log.Info("Sending meta bundle match", "hint", hint)
 					dataId, err := SendMetaBundleMatch(
 						client,
 						targetBlock,
 						metaBundleContract,
-						blockBuilderContract,
 						hint.DataID,
-						big.NewInt(int64(hint.MetaBundle.Value)),
-						hint.MetaBundle.Address)
+						hint.MetaBundle.Value,
+						hint.MetaBundle.FeeRecipient)
 					if err != nil {
 						return err
 					}
@@ -442,21 +526,4 @@ func main() {
 			os.Exit(1)
 		}
 	}
-}
-
-type HintEvent struct {
-	DataID              [16]byte
-	DecryptionCondition uint64
-	AllowedPeekers      []common.Address
-}
-
-func (b *HintEvent) Unpack(log *types.Log) error {
-	unpacked, err := BasicBundleArtifact.Abi.Events["HintEvent"].Inputs.Unpack(log.Data)
-	if err != nil {
-		return err
-	}
-	b.DataID = unpacked[0].([16]byte)
-	b.DecryptionCondition = unpacked[1].(uint64)
-	b.AllowedPeekers = unpacked[2].([]common.Address)
-	return nil
 }
