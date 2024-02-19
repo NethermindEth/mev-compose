@@ -14,8 +14,8 @@ contract ComposableBlock is Test, SuaveEnabled {
     using JSONParserLib for *;
     using LibString for *;
 
+    address fundedAccountAddr = address(0xb5feafbdd752ad52afb7e1bd2e40432a485bbb7f);
     string fundedAccountPrivKey = "6c45335a22461ccdb978b78ab61b238bad2fae4544fb55c14eb096c875ccfc52";
-    string fundedAccountAddr = "b5feafbdd752ad52afb7e1bd2e40432a485bbb7f";
 
     address accountAddr = address(0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266);
     string accountPrivKey = "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";

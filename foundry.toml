@@ -8,7 +8,7 @@ remappings = [
     "solady/src/=lib/solady/src/",
     "Solidity-RLP/=lib/suave-std/lib/Solidity-RLP/contracts/",
     "ds-test/=lib/suave-std/lib/solady/lib/ds-test/src/",
-    "forge-std/=lib/suave-std/lib/forge-std/src/",
+    "forge-std/=lib/forge-std/src/",
     "solady/=lib/solady/src/",
     "suave-std/=lib/suave-std/src/",
 ]
