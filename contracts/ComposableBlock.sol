@@ -4,7 +4,7 @@ pragma solidity ^0.8.19;
 import "suave-std/suavelib/Suave.sol";
 import "suave-std/Transactions.sol";
 import "suave-std/protocols/Bundle.sol";
-
+import "solady/src/utils/JSONParserLib.sol";
 
 contract BasicBundleContract {
     event HintEvent(Suave.DataId dataId, uint64 decryptionCondition, address[] allowedPeekers);
@@ -14,16 +14,22 @@ contract BasicBundleContract {
         address[] memory dataAllowedPeekers,
         address[] memory dataAllowedStores
     ) external payable returns (bytes memory) {
+        Suave.DataRecord memory dataRecord = createBundle(decryptionCondition, dataAllowedPeekers, dataAllowedStores);
+        return emitAndReturn(dataRecord);
+    }
+
+    function createBundle(
+        uint64 decryptionCondition,
+        address[] memory dataAllowedPeekers,
+        address[] memory dataAllowedStores
+    ) public returns (Suave.DataRecord memory) {
         require(Suave.isConfidential());
-
         bytes memory bundleData = Suave.confidentialInputs();
-
         Suave.DataRecord memory dataRecord =
-            Suave.newDataRecord(decryptionCondition, dataAllowedPeekers, dataAllowedStores, "default:v0:ethBundles");
+          Suave.newDataRecord(decryptionCondition, dataAllowedPeekers, dataAllowedStores, "default:v0:ethBundles");
 
         Suave.confidentialStore(dataRecord.id, "default:v0:ethBundles", bundleData);
-
-        return emitAndReturn(dataRecord);
+        return dataRecord;
     }
 
     function emitHint(Suave.DataRecord calldata dataRecord) external {
@@ -40,7 +46,7 @@ contract MetaBundleContract {
 
     struct MetaBundle {
         Suave.DataId[] bundleIds;
-        uint64 value;
+        uint256 value;
         address feeRecipient;
     }
 
@@ -48,63 +54,125 @@ contract MetaBundleContract {
     event MatchEvent(Suave.DataId dataId, uint64 decryptionCondition, address[] allowedPeekers);
 
     address[] public allowedPeekers = [address(this), Suave.BUILD_ETH_BLOCK];
+    address[] public allowedStores;
 
-    function newMetaBundle(
+    using JSONParserLib for JSONParserLib.Item;
+    using JSONParserLib for string;
+    using LibString for string;
+
+    function createMetaBundle(
         uint64 decryptionCondition,
-        address[] memory dataAllowedPeekers,
-        address[] memory dataAllowedStores,
         MetaBundle memory metaBundle
-    ) external payable returns (bytes memory) {
+    ) public returns (Suave.DataRecord memory) {
         require(Suave.isConfidential());
 
         // fetch backrun bundle data.
-        bytes memory matchBundleData = Suave.confidentialInputs();
-        uint64 egp = Suave.simulateBundle(matchBundleData);
+        bytes memory backrunBundleData = Suave.confidentialInputs();
+        uint64 egp = Suave.simulateBundle(backrunBundleData);
 
-        Suave.DataRecord memory dataRecord = Suave.newDataRecord(
-            decryptionCondition, dataAllowedPeekers, dataAllowedStores, "default:v0:ethBundles");
-
-        Suave.confidentialStore(dataRecord.id, "default:v0:ethBundles", matchBundleData);
-        Suave.confidentialStore(dataRecord.id, "default:v0:ethBundleSimResults", abi.encode(egp));
+        Suave.DataRecord memory backrunDataRecord = Suave.newDataRecord(
+            decryptionCondition, allowedPeekers, allowedStores, "default:v0:ethBundles");
+        Suave.confidentialStore(backrunDataRecord.id, "default:v0:ethBundles", backrunBundleData);
+        Suave.confidentialStore(backrunDataRecord.id, "default:v0:ethBundleSimResults", abi.encode(egp));
 
         // merge data records
         Suave.DataId[] memory dataRecords = new Suave.DataId[](metaBundle.bundleIds.length + 1);
         for (uint256 i = 0; i < metaBundle.bundleIds.length; i++) {
             dataRecords[i] = metaBundle.bundleIds[i];
         }
-        dataRecords[metaBundle.bundleIds.length] = dataRecord.id;
+        dataRecords[metaBundle.bundleIds.length] = backrunDataRecord.id;
 
+        Suave.DataRecord memory dataRecord = Suave.newDataRecord(decryptionCondition, allowedPeekers, allowedStores, "default:v0:ethMetaBundles");
         Suave.confidentialStore(dataRecord.id, "default:v0:ethMetaBundles", abi.encode(dataRecords));
-        Suave.confidentialStore(dataRecord.id, "default:v0:ethMetaBundleValues", abi.encode(metaBundle.value));
+        Suave.confidentialStore(dataRecord.id, "default:v0:ethMetaBundleValue", abi.encode(metaBundle.value));
         Suave.confidentialStore(dataRecord.id, "default:v0:ethMetaBundleFeeRecipient", abi.encode(metaBundle.feeRecipient));
-        return emitAndReturn(dataRecord, metaBundle);
+        return dataRecord;
+    }
+
+    function newMetaBundle(
+        uint64 decryptionCondition,
+        MetaBundle memory metaBundle
+    ) external payable returns (bytes memory) {
+        require(Suave.isConfidential());
+        Suave.DataRecord memory dataRecord = createMetaBundle(decryptionCondition, metaBundle);
+        return bytes.concat(this.emitHint.selector, abi.encode(dataRecord, metaBundle));
     }
 
     function emitHint(Suave.DataRecord memory dataRecord, MetaBundle memory metaBundle) public {
         emit HintEvent(dataRecord.id, dataRecord.decryptionCondition, dataRecord.allowedPeekers, metaBundle);
     }
 
-    function emitAndReturn(Suave.DataRecord memory dataRecord, MetaBundle memory metaBundle) internal returns (bytes memory) {
-        emit HintEvent(dataRecord.id, dataRecord.decryptionCondition, dataRecord.allowedPeekers, metaBundle);
-        return bytes.concat(this.emitHint.selector, abi.encode(dataRecord));
+    function fromHexChar(uint8 c) internal pure returns (uint8) {
+        if (bytes1(c) >= bytes1('0') && bytes1(c) <= bytes1('9')) {
+            return c - uint8(bytes1('0'));
+        }
+        if (bytes1(c) >= bytes1('a') && bytes1(c) <= bytes1('f')) {
+            return 10 + c - uint8(bytes1('a'));
+        }
+        if (bytes1(c) >= bytes1('A') && bytes1(c) <= bytes1('F')) {
+            return 10 + c - uint8(bytes1('A'));
+        }
+        revert("fail");
+    }
+
+    // Convert an hexadecimal string to raw bytes
+    function fromHex(string memory s) internal pure returns (bytes memory) {
+        bytes memory ss = bytes(s);
+        require(ss.length%2 == 0); // length must be even
+        bytes memory r = new bytes(ss.length/2);
+        for (uint i=0; i<ss.length/2; ++i) {
+            r[i] = bytes1(fromHexChar(uint8(ss[2*i])) * 16 +
+                          fromHexChar(uint8(ss[2*i+1])));
+        }
+        return r;
+    }
+
+    function _stripQuotesAndPrefix(string memory s) internal pure returns (string memory) {
+        bytes memory strBytes = bytes(s);
+        bytes memory result = new bytes(strBytes.length-4);
+        for (uint i = 3; i < strBytes.length-1; i++) {
+            result[i-3] = strBytes[i];
+        }
+        return string(result);
+    }
+
+    function parseBundleJson(string memory bundleJson) public pure returns (Bundle.BundleObj memory) {
+        JSONParserLib.Item memory root = bundleJson.parse();
+        JSONParserLib.Item memory txnsNode = root.at('"txns"');
+        uint256 txnsLength = txnsNode.size();
+        bytes[] memory txns = new bytes[](txnsLength);
+
+        for (uint256 i=0; i < txnsLength; i++) {
+            JSONParserLib.Item memory txnNode = txnsNode.at(i);
+            bytes memory txn = fromHex(_stripQuotesAndPrefix(txnNode.value()));
+            txns[i] = txn;
+        }
+
+        uint256 blockNumber = root.at('"blockNumber"').value().parseUint();
+        uint256 minTimestamp = root.at('"minTimestamp"').value().parseUint();
+        uint256 maxTimestamp = root.at('"maxTimestamp"').value().parseUint();
+
+        Bundle.BundleObj memory bundle;
+        bundle.blockNumber = uint64(blockNumber);
+        bundle.minTimestamp = uint64(minTimestamp);
+        bundle.maxTimestamp = uint64(maxTimestamp);
+        bundle.txns = txns;
+        return bundle;
     }
 
     function newMatch(uint64 decryptionCondition,
-                      address[] memory dataAllowedPeekers,
-                      address[] memory dataAllowedStores,
                       Suave.DataId dataId) external returns (bytes memory) {
         require(Suave.isConfidential());
 
         // Parse payment bundle.
         bytes memory paymentBundleData = Suave.confidentialInputs();
-        Bundle.BundleObj memory paymentBundleObj = abi.decode(paymentBundleData, (Bundle.BundleObj));
-        bytes memory paymentBundleJson = Bundle.encodeBundle(paymentBundleObj).body;
+        Bundle.BundleObj memory paymentBundleObj = parseBundleJson(string(paymentBundleData));
 
         require(paymentBundleObj.txns.length == 1, "Payment bundle must contain exactly one transaction");
         Transactions.EIP155 memory paymentTx = Transactions.decodeRLP_EIP155(paymentBundleObj.txns[0]);
 
         // check validity of payment
-        uint64 value = abi.decode(Suave.confidentialRetrieve(dataId, "default:v0:ethMetaBundleValues"), (uint64));
+        uint64 value = abi.decode(Suave.confidentialRetrieve(dataId, "default:v0:ethMetaBundleValue"), (uint64));
         address feeRecipient = abi.decode(Suave.confidentialRetrieve(dataId, "default:v0:ethMetaBundleFeeRecipient"), (address));
         require(paymentTx.value == value, "PaymentTx amount does not match metaBundle value");
         require(paymentTx.to == feeRecipient, "PaymentTx recipient does not match metaBundle feeRecipient");
@@ -112,14 +180,14 @@ contract MetaBundleContract {
 
         // payment bundle is valid. save it to confidential store
         Suave.DataRecord memory paymentBundleDataRecord = Suave.newDataRecord(
-            decryptionCondition, dataAllowedPeekers, dataAllowedStores, "default:v0:ethBundles");
-        Suave.confidentialStore(paymentBundleDataRecord.id, "default:v0:ethBundles", paymentBundleJson);
+            decryptionCondition, allowedPeekers, allowedStores, "default:v0:ethBundles");
+        Suave.confidentialStore(paymentBundleDataRecord.id, "default:v0:ethBundles", paymentBundleData);
 
         // save the meta bundle.
         bytes memory bundleIdsData = Suave.confidentialRetrieve(dataId, "default:v0:ethMetaBundles");
         Suave.DataId[] memory bundleIds = abi.decode(bundleIdsData, (Suave.DataId[]));
         Suave.DataRecord memory dataRecord = Suave.newDataRecord(
-            decryptionCondition, dataAllowedPeekers, dataAllowedStores, "default:v0:mergedDataRecords");
+            decryptionCondition, allowedPeekers, allowedStores, "default:v0:mergedDataRecords");
         Suave.DataId[] memory dataRecords = new Suave.DataId[](bundleIds.length + 1);
 
         for (uint256 i = 0; i < bundleIds.length; i++) {
