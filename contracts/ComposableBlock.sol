@@ -10,20 +10,10 @@ import "forge-std/console.sol";
 contract BasicBundleContract {
     event HintEvent(Suave.DataId dataId, uint64 decryptionCondition, address[] allowedPeekers);
 
-    function newBundle(
-        uint64 decryptionCondition,
-        address[] memory dataAllowedPeekers,
-        address[] memory dataAllowedStores
-    ) external payable returns (bytes memory) {
-        Suave.DataRecord memory dataRecord = createBundle(decryptionCondition, dataAllowedPeekers, dataAllowedStores);
-        return emitAndReturn(dataRecord);
-    }
+    address[] public allowedPeekers = [address(this), Suave.BUILD_ETH_BLOCK];
+    address[] public allowedStores;
 
-    function createBundle(
-        uint64 decryptionCondition,
-        address[] memory dataAllowedPeekers,
-        address[] memory dataAllowedStores
-    ) public returns (Suave.DataRecord memory) {
+    function newBundle(uint64 decryptionCondition) external payable returns (bytes memory) {
         require(Suave.isConfidential());
 
         // verify bundle validity.
@@ -33,9 +23,11 @@ contract BasicBundleContract {
 
         // save bundle to conf store.
         Suave.DataRecord memory dataRecord =
-            Suave.newDataRecord(decryptionCondition, dataAllowedPeekers, dataAllowedStores, "default:v0:ethBundles");
+            Suave.newDataRecord(decryptionCondition, allowedPeekers, allowedStores, "default:v0:ethBundles");
         Suave.confidentialStore(dataRecord.id, "default:v0:ethBundles", bundleData);
-        return dataRecord;
+        Suave.confidentialStore(dataRecord.id, "mevcompose:v0:ethBundles", bundleData);
+
+        return emitAndReturn(dataRecord);
     }
 
     function emitHint(Suave.DataRecord calldata dataRecord) external {
@@ -58,7 +50,7 @@ contract MetaBundleContract {
     event HintEvent(Suave.DataId dataId, uint64 decryptionCondition, address[] allowedPeekers, MetaBundle metaBundle);
     event MatchEvent(Suave.DataId dataId, uint64 decryptionCondition, address[] allowedPeekers);
 
-    address[] public allowedPeekers = [address(this)];
+    address[] public allowedPeekers = [address(this), Suave.BUILD_ETH_BLOCK];
     address[] public allowedStores;
 
     using JSONParserLib for JSONParserLib.Item;
@@ -83,7 +75,7 @@ contract MetaBundleContract {
         );
         Suave.DataRecord memory backrunBundleRecord =
             Suave.newDataRecord(decryptionCondition, allowedPeekers, allowedStores, "mevcompose:v0:backrunBundles");
-        Suave.confidentialStore(backrunBundleRecord.id, "default:v0:ethBundles", backrunBundleData);
+        Suave.confidentialStore(backrunBundleRecord.id, "mevcompose:v0:ethBundles", backrunBundleData);
 
         Suave.DataId[] memory bundleIds = new Suave.DataId[](metaBundle.bundleIds.length + 1);
         for (uint256 i = 0; i < metaBundle.bundleIds.length; i++) {
@@ -186,11 +178,7 @@ contract MetaBundleContract {
         return bundle;
     }
 
-    function newMatch(uint64 decryptionCondition, address[] calldata peekers, Suave.DataId dataId)
-        external
-        payable
-        returns (bytes memory)
-    {
+    function newMatch(uint64 decryptionCondition, Suave.DataId dataId) external payable returns (bytes memory) {
         require(Suave.isConfidential());
 
         // Parse payment bundle.
@@ -209,7 +197,7 @@ contract MetaBundleContract {
         require(egp > 0, "Payment bundle simulation failed");
 
         Suave.DataRecord memory dataRecord =
-            Suave.newDataRecord(decryptionCondition, peekers, allowedStores, "mevcompose:v0:matchedMetaBundles");
+            Suave.newDataRecord(decryptionCondition, allowedPeekers, allowedStores, "mevcompose:v0:matchMetaBundles");
 
         // payment bundle is valid. save it to confidential store
         Suave.confidentialStore(dataRecord.id, "mevcompose:v0:paymentBundles", paymentBundleData);
@@ -242,22 +230,16 @@ contract BlockBuilderContract {
         emit NewBuilderBidEvent(record.id, record.decryptionCondition, record.allowedPeekers, envelope);
     }
 
-    function build(BundleDataId[] memory bundleDataIds, uint64 blockNumber, string memory boostRelayUrl)
-        external
-        payable
-        returns (bytes memory)
-    {
+    function build(BundleDataId[] memory bundleDataIds, uint64 blockNumber) external payable returns (bytes memory) {
         require(Suave.isConfidential());
 
         Suave.DataRecord memory record =
-            Suave.newDataRecord(blockNumber, allowedPeekers, allowedStores, "default:v0:mergedDataRecords");
+            Suave.newDataRecord(blockNumber, allowedPeekers, allowedStores, "default:v0:ethBlocks");
         Suave.confidentialStore(record.id, "default:v0:mergedDataRecords", abi.encode(bundleDataIds));
         Suave.BuildBlockArgs memory blockArgs;
         (bytes memory builderBid, bytes memory envelope) = Suave.buildEthBlock(blockArgs, record.id, ""); // namespace not used.
-        Suave.DataRecord memory builderBidRecord =
-            Suave.newDataRecord(blockNumber, allowedPeekers, allowedStores, "default:v0:builderBids");
-        Suave.confidentialStore(builderBidRecord.id, "default:v0:builderBids", builderBid);
-        Suave.submitEthBlockToRelay(boostRelayUrl, builderBid);
-        return bytes.concat(this.emitNewBuilderBidEvent.selector, abi.encode(builderBidRecord, envelope));
+        Suave.confidentialStore(record.id, "default:v0:builderBids", builderBid);
+        Suave.confidentialStore(record.id, "default:v0:payloads", envelope);
+        return bytes.concat(this.emitNewBuilderBidEvent.selector, abi.encode(record, envelope));
     }
 }
