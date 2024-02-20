@@ -23,11 +23,11 @@ contract ComposableBlock is Test, SuaveEnabled {
     function testParseBundleJson() public {
         MetaBundleContract metaBundleContract = new MetaBundleContract();
 
-        string memory json = "{" '"blockNumber": 11223344,' '"minTimestamp": 1625072400,'
-            '"maxTimestamp": 1625076000,' '"txns": [' '"0xdeadbeef",' '"0xc0ffee",' '"0x00aabb"' "]" "}";
+        string memory json = "{" '"blockNumber": "0xdead",' '"minTimestamp": 1625072400,'
+            '"maxTimestamp": 1625076000,' '"txs": [' '"0xdeadbeef",' '"0xc0ffee",' '"0x00aabb"' "]" "}";
 
         Bundle.BundleObj memory bundle = metaBundleContract.parseBundleJson(json);
-        assertEq(bundle.blockNumber, 11223344);
+        assertEq(bundle.blockNumber, 0xdead);
         assertEq(bundle.minTimestamp, 1625072400);
         assertEq(bundle.maxTimestamp, 1625076000);
         assertEq(bundle.txns.length, 3);
@@ -53,7 +53,7 @@ contract ComposableBlock is Test, SuaveEnabled {
         return bundle;
     }
 
-    function encodeBundleJSON(Bundle.BundleObj memory args) internal returns (bytes memory) {
+    function encodeBundleJSON(Bundle.BundleObj memory args) internal pure returns (bytes memory) {
         bytes memory params =
             abi.encodePacked('{"blockNumber": "', LibString.toHexString(args.blockNumber), '", "txs": [');
         for (uint256 i = 0; i < args.txns.length; i++) {
@@ -72,31 +72,5 @@ contract ComposableBlock is Test, SuaveEnabled {
         }
         params = abi.encodePacked(params, "}");
         return bytes(params);
-    }
-
-    function testNewMetaBundle() public {
-        BasicBundleContract basicBundleContract = new BasicBundleContract();
-        MetaBundleContract metaBundleContract = new MetaBundleContract();
-        Transactions.EIP155Request memory txData = Transactions.EIP155Request({
-            nonce: 0,
-            gasPrice: 13,
-            gas: 21000,
-            to: address(0),
-            value: 0,
-            data: new bytes(0),
-            chainId: 1337
-        });
-        uint64 blockNumber = 11223344;
-        Bundle.BundleObj memory bundle = createBundle(blockNumber, txData, fundedAccountPrivKey);
-        bytes memory bundleData = encodeBundleJSON(bundle);
-        setConfidentialInputs(bundleData);
-        Suave.DataRecord memory record = basicBundleContract.createBundle(blockNumber, addressList, addressList);
-
-        Suave.DataId[] memory bundleIds = new Suave.DataId[](1);
-        bundleIds[0] = record.id;
-
-        MetaBundleContract.MetaBundle memory metaBundle =
-            MetaBundleContract.MetaBundle({bundleIds: bundleIds, value: 10000, feeRecipient: address(0)});
-        Suave.DataRecord memory metaBundleRecord = metaBundleContract.createMetaBundle(blockNumber, metaBundle);
     }
 }
