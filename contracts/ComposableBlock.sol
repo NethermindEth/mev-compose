@@ -79,7 +79,8 @@ contract MetaBundleContract {
         }
 
         Suave.DataRecord memory dataRecord = Suave.newDataRecord(
-            decryptionCondition, allowedPeekers, allowedStores, "mevcompose:v0:unmatchedMetaBundles");
+            decryptionCondition, allowedPeekers, allowedStores, "mevcompose:v0:unmatchedMetaBundles"
+        );
         Suave.DataRecord memory backrunBundleRecord =
             Suave.newDataRecord(decryptionCondition, allowedPeekers, allowedStores, "mevcompose:v0:backrunBundles");
         Suave.confidentialStore(backrunBundleRecord.id, "default:v0:ethBundles", backrunBundleData);
@@ -185,7 +186,11 @@ contract MetaBundleContract {
         return bundle;
     }
 
-    function newMatch(uint64 decryptionCondition, address[] calldata peekers, Suave.DataId dataId) external payable returns (bytes memory) {
+    function newMatch(uint64 decryptionCondition, address[] calldata peekers, Suave.DataId dataId)
+        external
+        payable
+        returns (bytes memory)
+    {
         require(Suave.isConfidential());
 
         // Parse payment bundle.
@@ -203,8 +208,8 @@ contract MetaBundleContract {
         uint64 egp = Suave.simulateBundle(paymentBundleData);
         require(egp > 0, "Payment bundle simulation failed");
 
-        Suave.DataRecord memory dataRecord = Suave.newDataRecord(
-            decryptionCondition, peekers, allowedStores, "mevcompose:v0:matchedMetaBundles");
+        Suave.DataRecord memory dataRecord =
+            Suave.newDataRecord(decryptionCondition, peekers, allowedStores, "mevcompose:v0:matchedMetaBundles");
 
         // payment bundle is valid. save it to confidential store
         Suave.confidentialStore(dataRecord.id, "mevcompose:v0:paymentBundles", paymentBundleData);
@@ -244,8 +249,8 @@ contract BlockBuilderContract {
     {
         require(Suave.isConfidential());
 
-        Suave.DataRecord memory record = Suave.newDataRecord(
-            blockNumber, allowedPeekers, allowedStores, "default:v0:mergedDataRecords");
+        Suave.DataRecord memory record =
+            Suave.newDataRecord(blockNumber, allowedPeekers, allowedStores, "default:v0:mergedDataRecords");
         Suave.confidentialStore(record.id, "default:v0:mergedDataRecords", abi.encode(bundleDataIds));
         Suave.BuildBlockArgs memory blockArgs;
         (bytes memory builderBid, bytes memory envelope) = Suave.buildEthBlock(blockArgs, record.id, ""); // namespace not used.
