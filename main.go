@@ -330,7 +330,6 @@ func SendBlock(
 	blockBuilderContract *sdk.Contract,
 	bundleDataIds [][16]byte,
 ) error {
-	log.Info("Latest header", "header", header, "targetBlock", targetBlock)
 	// TODO: should communicate with CL to get the correct attributes for next block.
 	blockArgs := types.BuildBlockArgs{
 		Slot:         header.Number.Uint64() + 1,
@@ -419,7 +418,7 @@ func main() {
 			},
 		},
 		{
-			name: "Get latest header",
+			name: "Get target block number",
 			action: func() error {
 				var err error
 				latestHeader, err = ethClt.RPC().HeaderByNumber(context.Background(), nil)
