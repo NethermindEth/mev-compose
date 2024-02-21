@@ -3,9 +3,9 @@ package main
 import (
 	"context"
 	"crypto/ecdsa"
-	"encoding/json"
 	"fmt"
 	"math/big"
+	"math/rand"
 	"os"
 
 	"github.com/ethereum/go-ethereum"
@@ -15,7 +15,6 @@ import (
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/ethereum/go-ethereum/suave/sdk"
 	log "github.com/inconshreveable/log15"
-	"github.com/umbracle/ethgo/abi"
 )
 
 var (
@@ -35,7 +34,8 @@ type step struct {
 }
 
 type privKey struct {
-	priv *ecdsa.PrivateKey
+	priv  *ecdsa.PrivateKey
+	nonce uint64
 }
 
 func (p *privKey) Address() common.Address {
@@ -44,6 +44,23 @@ func (p *privKey) Address() common.Address {
 
 func (p *privKey) MarshalPrivKey() []byte {
 	return crypto.FromECDSA(p.priv)
+}
+
+func (p *privKey) Nonce() uint64 {
+	return p.nonce
+}
+
+func (p *privKey) StepNonce() {
+	p.nonce = p.nonce + 1
+}
+
+type Client struct {
+	*sdk.Client
+	Key *privKey
+}
+
+func NewClient(rpc *rpc.Client, key *privKey, addr common.Address) *Client {
+	return &Client{Client: sdk.NewClient(rpc, key.priv, addr), Key: key}
 }
 
 func newPrivKeyFromHex(hex string) *privKey {
@@ -62,7 +79,7 @@ func generatePrivKey() *privKey {
 	return &privKey{priv: key}
 }
 
-func fundAccount(clt *sdk.Client, to common.Address, value *big.Int) error {
+func fundAccount(clt *Client, to common.Address, value *big.Int) error {
 	txn := &types.LegacyTx{
 		Value: value,
 		To:    &to,
@@ -86,8 +103,8 @@ func fundAccount(clt *sdk.Client, to common.Address, value *big.Int) error {
 	return nil
 }
 
-func DeployContract(artifact *Artifact, clt *sdk.Client) (*sdk.Contract, error) {
-	txnResult, err := sdk.DeployContract(artifact.Code, clt)
+func DeployContract(artifact *Artifact, clt *Client) (*sdk.Contract, error) {
+	txnResult, err := sdk.DeployContract(artifact.Code, clt.Client)
 
 	if err != nil {
 		return nil, err
@@ -102,8 +119,7 @@ func DeployContract(artifact *Artifact, clt *sdk.Client) (*sdk.Contract, error) 
 		return nil, fmt.Errorf("failed to deploy contract")
 	}
 
-	log.Info("Contract deployed", "address", receipt.ContractAddress.Hex())
-	return sdk.GetContract(receipt.ContractAddress, artifact.Abi, clt), nil
+	return sdk.GetContract(receipt.ContractAddress, artifact.Abi, clt.Client), nil
 }
 
 func MakeBundle(txn1 *types.Transaction, txn2 *types.Transaction) ([]byte, error) {
@@ -114,23 +130,21 @@ func MakeBundle(txn1 *types.Transaction, txn2 *types.Transaction) ([]byte, error
 	}
 
 	bundle := &types.SBundle{
-		Txs: txs,
+		BlockNumber: big.NewInt(1),
+		Txs:         txs,
 	}
 
-	bundleBytes, err := json.Marshal(bundle)
+	bundleBytes, err := bundle.MarshalJSON()
 	return bundleBytes, err
 }
 
 func SignTxnWithNonce(
-	client *sdk.Client,
+	client *Client,
 	txn *types.LegacyTx,
 ) (*types.Transaction, error) {
 	if txn.Nonce == 0 {
-		nonce, err := client.RPC().PendingNonceAt(context.Background(), client.Addr())
-		if err != nil {
-			return nil, err
-		}
-		txn.Nonce = nonce
+		txn.Nonce = client.Key.nonce
+		client.Key.StepNonce()
 	}
 
 	if txn.GasPrice == nil {
@@ -163,35 +177,23 @@ func SignTxnWithNonce(
 	return signed, nil
 }
 
+func getAllowedPeekers(addresses ...common.Address) []common.Address {
+	peekers := []common.Address{common.HexToAddress("0x0000000000000000000000000000000042100001")} // build_eth_block addr
+	for _, address := range addresses {
+		peekers = append(peekers, address)
+	}
+	return peekers
+}
+
 func SendBundle(
-	client1 *sdk.Client,
-	client2 *sdk.Client,
-	targetAddr common.Address,
+	bundle *types.SBundle,
 	targetBlock uint64,
+	allowedPeekers []common.Address,
 	bundleContract *sdk.Contract) (*[16]byte, error) {
-	ethTxn1, err := SignTxnWithNonce(client1, &types.LegacyTx{
-		To:    &targetAddr,
-		Value: big.NewInt(1000),
-	})
 
-	if err != nil {
-		return nil, err
-	}
-
-	ethTxnBackrun, err := SignTxnWithNonce(client2, &types.LegacyTx{
-		To:    &targetAddr,
-		Value: big.NewInt(1000),
-	})
-
-	if err != nil {
-		return nil, err
-	}
-
-	bundleBytes, _ := MakeBundle(ethTxn1, ethTxnBackrun)
-	allowedPeekers := []common.Address{bundleContract.Address()}
-	confidentialDataBytes, _ := BasicBundleArtifact.Abi.Methods["newBundle"].Outputs.Pack(bundleBytes)
+	bundleBytes, err := bundle.MarshalJSON()
 	txnResult, err := bundleContract.SendTransaction(
-		"newBundle", []interface{}{targetBlock, allowedPeekers, []common.Address{}}, confidentialDataBytes)
+		"newBundle", []interface{}{targetBlock, allowedPeekers, []common.Address{}}, bundleBytes)
 
 	if err != nil {
 		return nil, err
@@ -217,19 +219,18 @@ func SendBundle(
 }
 
 func SendMetaBundle(
-	client *sdk.Client,
-	to common.Address,
+	client *Client,
 	targetBlock uint64,
+	allowedPeekers []common.Address,
 	metaBundleContract *sdk.Contract,
 	bundleIds [][16]byte,
 	value *big.Int,
 	address common.Address,
 ) (*MetaBundleHintEvent, error) {
+	to := generatePrivKey().Address()
 	ethTxn1, err := SignTxnWithNonce(client, &types.LegacyTx{
-		To:       &to,
-		Value:    big.NewInt(1000),
-		Gas:      21000,
-		GasPrice: big.NewInt(13),
+		To:    &to,
+		Value: big.NewInt(1000),
 	})
 	if err != nil {
 		return nil, err
@@ -240,10 +241,6 @@ func SendMetaBundle(
 		return nil, err
 	}
 
-	confidentialDataBytes, err := MetaBundleArtifact.Abi.Methods["newMetaBundle"].Outputs.Pack(bundleBytes)
-	if err != nil {
-		return nil, err
-	}
 	metaBundle := MetaBundle{
 		BundleIds:    bundleIds,
 		Value:        value,
@@ -251,7 +248,7 @@ func SendMetaBundle(
 	}
 
 	txnResult, err := metaBundleContract.SendTransaction("newMetaBundle",
-		[]interface{}{targetBlock, metaBundle}, confidentialDataBytes)
+		[]interface{}{targetBlock, allowedPeekers, []common.Address{}, metaBundle}, bundleBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -276,33 +273,32 @@ func SendMetaBundle(
 }
 
 func SendMetaBundleMatch(
-	client *sdk.Client,
+	client *Client,
 	targetBlock uint64,
+	allowedPeekers []common.Address,
 	metaBundleContract *sdk.Contract,
 	dataId [16]byte,
 	value *big.Int,
 	feeRecipient common.Address,
 ) (*[16]byte, error) {
-	paymentTx, _ := client.SignTxn(&types.LegacyTx{
-		To:       &feeRecipient,
-		Value:    value,
-		Gas:      21000,
-		GasPrice: big.NewInt(13),
+	paymentTx, err := SignTxnWithNonce(client, &types.LegacyTx{
+		To:    &feeRecipient,
+		Value: value,
 	})
 
+	if err != nil {
+		return nil, err
+	}
+
 	bundleBytes, err := MakeBundle(paymentTx, nil)
+	log.Info("Payment bundle", "bundle", string(bundleBytes))
 
 	if err != nil {
 		return nil, err
 	}
 
-	// Set the paid metabundle peekable to builder contract
-	confidentialDataBytes, err := PackToBytes(bundleBytes)
-	if err != nil {
-		return nil, err
-	}
-
-	txnResult, err := metaBundleContract.SendTransaction("newMatch", []interface{}{targetBlock, dataId}, confidentialDataBytes)
+	txnResult, err := metaBundleContract.SendTransaction(
+		"newMatch", []interface{}{targetBlock, allowedPeekers, []common.Address{}, dataId}, bundleBytes)
 
 	if err != nil {
 		return nil, err
@@ -314,7 +310,7 @@ func SendMetaBundleMatch(
 	}
 
 	if receipt.Status == 0 {
-		return nil, fmt.Errorf("failed to send a transaction")
+		return nil, fmt.Errorf("transaction had errors: %v", receipt)
 	}
 
 	matchEvent := &MetaBundleMatchEvent{}
@@ -328,13 +324,28 @@ func SendMetaBundleMatch(
 }
 
 func SendBlock(
-	client *sdk.Client,
+	header *types.Header,
 	targetBlock uint64,
+	allowedPeekers []common.Address,
 	blockBuilderContract *sdk.Contract,
-	dataIds [][16]byte,
+	bundleDataIds [][16]byte,
 ) error {
-	txnResult, err := blockBuilderContract.SendTransaction("build",
-		[]interface{}{dataIds, targetBlock, "http://localhost:18550"}, nil)
+	log.Info("Latest header", "header", header, "targetBlock", targetBlock)
+	// TODO: should communicate with CL to get the correct attributes for next block.
+	blockArgs := types.BuildBlockArgs{
+		Slot:         header.Number.Uint64() + 1,
+		Parent:       header.Hash(),
+		Timestamp:    header.Time + 12,
+		GasLimit:     header.GasLimit,
+		FeeRecipient: common.Address{},
+		Extra:        header.Extra,
+	}
+
+	txnResult, err := blockBuilderContract.SendTransaction(
+		"build", []interface{}{targetBlock, blockArgs, allowedPeekers, []common.Address{}, bundleDataIds}, nil)
+	if err != nil {
+		return fmt.Errorf("failed to send a transaction: %v", err)
+	}
 
 	receipt, err := txnResult.Wait()
 	if err != nil {
@@ -355,25 +366,21 @@ func SendBlock(
 	return nil
 }
 
-func PackToBytes(data []byte) ([]byte, error) {
-	byteType, _ := abi.NewType("bytes")
-	encoded, err := byteType.Encode(data)
-	if err != nil {
-		return nil, err
-	}
-	return encoded, nil
-}
-
 func main() {
-	log.Info("Starting PoC")
+	log.Info("Starting composable block test...")
 	mevmRpc, _ := rpc.Dial(exNodeNetAddr)
-	mevmClt := sdk.NewClient(mevmRpc, fundedAccount.priv, kettleAddress)
+	mevmClt := NewClient(mevmRpc, fundedAccount, kettleAddress)
 	ethRpc, _ := rpc.Dial(L1NetAddr)
-	ethClt := sdk.NewClient(ethRpc, fundedAccount.priv, common.Address{})
+	ethClt := NewClient(ethRpc, fundedAccount, common.Address{})
+
+	var latestHeader *types.Header
+	var targetBlock uint64
 
 	var (
-		testAddr1 *privKey
-		testAddr2 *privKey
+		testAddr1    *privKey
+		testAddr2    *privKey
+		builderAddr1 *privKey
+		builderAddr2 *privKey
 	)
 
 	var basicBundleContract *sdk.Contract
@@ -390,9 +397,8 @@ func main() {
 			action: func() error {
 				testAddr1 = generatePrivKey()
 				testAddr2 = generatePrivKey()
-
-				log.Info("Test account 1", "address", testAddr1.Address().Hex())
-				log.Info("Test account 2", "address", testAddr2.Address().Hex())
+				builderAddr1 = generatePrivKey()
+				builderAddr2 = generatePrivKey()
 
 				fundBalance := new(big.Int)
 				fundBalance.Exp(big.NewInt(10), big.NewInt(18), nil)
@@ -400,11 +406,28 @@ func main() {
 				if err := fundAccount(ethClt, testAddr1.Address(), fundBalance); err != nil {
 					return err
 				}
-
 				if err := fundAccount(ethClt, testAddr2.Address(), fundBalance); err != nil {
 					return err
 				}
-
+				if err := fundAccount(ethClt, builderAddr1.Address(), fundBalance); err != nil {
+					return err
+				}
+				if err := fundAccount(ethClt, builderAddr2.Address(), fundBalance); err != nil {
+					return err
+				}
+				return nil
+			},
+		},
+		{
+			name: "Get latest header",
+			action: func() error {
+				var err error
+				latestHeader, err = ethClt.RPC().HeaderByNumber(context.Background(), nil)
+				if err != nil {
+					return err
+				}
+				targetBlock = uint64(latestHeader.Number.Uint64() + 1)
+				log.Info("Latest header", "header", latestHeader, "targetBlock", targetBlock)
 				return nil
 			},
 		},
@@ -416,16 +439,19 @@ func main() {
 				if err != nil {
 					return err
 				}
+				log.Info("Basic bundle contract address", "address", basicBundleContract.Address())
 
 				metaBundleContract, err = DeployContract(MetaBundleArtifact, mevmClt)
 				if err != nil {
 					return err
 				}
+				log.Info("Meta bundle contract address", "address", metaBundleContract.Address())
 
 				blockBuilderContract, err = DeployContract(BlockBuilderArtifact, mevmClt)
 				if err != nil {
 					return err
 				}
+				log.Info("Block builder contract address", "address", blockBuilderContract.Address())
 
 				return nil
 			},
@@ -433,15 +459,17 @@ func main() {
 		{
 			name: "Send eth bundles",
 			action: func() error {
-				client1 := sdk.NewClient(ethRpc, testAddr1.priv, common.Address{})
-				client2 := sdk.NewClient(ethRpc, testAddr2.priv, common.Address{})
-				targetblock := uint64(1)
-
+				allowedPeekers := getAllowedPeekers(basicBundleContract.Address(),
+					metaBundleContract.Address(), blockBuilderContract.Address())
+				gen := NewBundleGenerator(ethClt, ethRpc)
 				// Start sending bundles
 				for i := 0; i < 10; i++ {
-					log.Info("Sending bundle", "i", i)
-					to := generatePrivKey().Address()
-					dataId, err := SendBundle(client1, client2, to, targetblock, basicBundleContract)
+					bundle, err := gen.GenerateBundle(2+rand.Intn(2), targetBlock)
+					if err != nil {
+						return err
+					}
+
+					dataId, err := SendBundle(bundle, targetBlock, allowedPeekers, basicBundleContract)
 					if err != nil {
 						return err
 					}
@@ -456,23 +484,22 @@ func main() {
 		{
 			name: "Send meta bundles",
 			action: func() error {
-				client := sdk.NewClient(ethRpc, testAddr1.priv, common.Address{})
-				to := testAddr1.Address()
-				targetBlock := uint64(1)
+				client := NewClient(ethRpc, builderAddr1, common.Address{})
+				allowedPeekers := getAllowedPeekers(metaBundleContract.Address(), blockBuilderContract.Address())
 
-				log.Info("Sending meta bundle 1: ", "ids", bundleDataIds[0:3])
+				log.Info("Sending meta bundle 1: ", "dataIds", bundleDataIds[0:3])
 
 				metaBundleHint, err := SendMetaBundle(
-					client, to, targetBlock, metaBundleContract, bundleDataIds[0:3], big.NewInt(1000), testAddr1.Address())
+					client, targetBlock, allowedPeekers, metaBundleContract, bundleDataIds[0:3], big.NewInt(1000), testAddr1.Address())
 				if err != nil {
 					return err
 				}
 				metaBundleHints = append(metaBundleHints, metaBundleHint)
 
-				log.Info("Sending meta bundle 2: ", "ids", bundleDataIds[5:8])
+				log.Info("Sending meta bundle 2: ", "dataIds", bundleDataIds[5:8])
 
 				metaBundleHint, err = SendMetaBundle(
-					client, to, targetBlock, metaBundleContract, bundleDataIds[5:8], big.NewInt(1000), testAddr1.Address())
+					client, targetBlock, allowedPeekers, metaBundleContract, bundleDataIds[5:8], big.NewInt(1000), testAddr1.Address())
 
 				if err != nil {
 					return err
@@ -485,14 +512,15 @@ func main() {
 		{
 			name: "Send meta bundle matches",
 			action: func() error {
-				client := sdk.NewClient(ethRpc, testAddr1.priv, common.Address{})
-				targetBlock := uint64(1)
+				client := NewClient(ethRpc, builderAddr2, common.Address{})
+				allowedPeekers := getAllowedPeekers(metaBundleContract.Address(), blockBuilderContract.Address())
 
 				for _, hint := range metaBundleHints {
 					log.Info("Sending meta bundle match", "hint", hint)
 					dataId, err := SendMetaBundleMatch(
 						client,
 						targetBlock,
+						allowedPeekers,
 						metaBundleContract,
 						hint.DataID,
 						hint.MetaBundle.Value,
@@ -502,15 +530,28 @@ func main() {
 					}
 					matchedMetaBundleIds = append(matchedMetaBundleIds, *dataId)
 				}
+				log.Info("Matched meta bundle ids", "ids", matchedMetaBundleIds)
 				return nil
 			},
 		},
 		{
 			name: "Build block and send to relay",
 			action: func() error {
-				client := sdk.NewClient(ethRpc, testAddr1.priv, common.Address{})
-				targetBlock := uint64(1)
-				err := SendBlock(client, targetBlock, blockBuilderContract, matchedMetaBundleIds)
+				var err error
+				latestHeader, err = ethClt.RPC().HeaderByNumber(context.Background(), nil)
+				if err != nil {
+					return err
+				}
+
+				allowedPeekers := getAllowedPeekers(blockBuilderContract.Address())
+				bundleIds := [][16]byte{
+					matchedMetaBundleIds[0],
+					bundleDataIds[3],
+					matchedMetaBundleIds[1],
+				}
+
+				log.Info("Building block with bundle ids", "bundleIds", bundleIds)
+				err = SendBlock(latestHeader, targetBlock, allowedPeekers, blockBuilderContract, bundleIds)
 				if err != nil {
 					return err
 				}

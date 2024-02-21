@@ -18,6 +18,7 @@ var (
 	BasicBundleArtifact  = newArtifact("ComposableBlock.sol/BasicBundleContract.json")
 	MetaBundleArtifact   = newArtifact("ComposableBlock.sol/MetaBundleContract.json")
 	BlockBuilderArtifact = newArtifact("ComposableBlock.sol/BlockBuilderContract.json")
+	SuaveArtifact        = newArtifact("Suave2.sol/Suave.json")
 )
 
 func newArtifact(name string) *Artifact {
@@ -64,12 +65,6 @@ type Artifact struct {
 type MetaBundle struct {
 	BundleIds    [][16]byte     `json:"bundleIds"`
 	Value        *big.Int       `json:"value"`
-	FeeRecipient common.Address `json:"feeRecipient"`
-}
-
-type MBundle struct {
-	BundleIds    [][16]byte     `json:"bundleIds"`
-	Value        uint64         `json:"value"`
 	FeeRecipient common.Address `json:"feeRecipient"`
 }
 
@@ -148,4 +143,9 @@ func (b *HintEvent) Unpack(log *types.Log) error {
 	b.DecryptionCondition = unpacked[1].(uint64)
 	b.AllowedPeekers = unpacked[2].([]common.Address)
 	return nil
+}
+
+type BundleDataId struct {
+	DataId       [16]byte `json:"dataId"`
+	IsMetaBundle bool     `json:"isMetaBundle"`
 }
