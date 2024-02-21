@@ -559,8 +559,11 @@ func main() {
 		},
 	}
 
+	red := "\033[31m"
+	reset := "\033[0m"
 	for i, step := range steps {
-		log.Info("Running step", "step", i, "name", step.name)
+		msg := fmt.Sprintf(red+"Running step %d: %s"+reset, i, step.name)
+		log.Info(msg)
 		if err := step.action(); err != nil {
 			log.Error("Failed to run step", "step", i, "name", step.name, "error", err)
 			os.Exit(1)
