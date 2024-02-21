@@ -534,7 +534,7 @@ func main() {
 			},
 		},
 		{
-			name: "Build block and send to relay",
+			name: "Build block",
 			action: func() error {
 				var err error
 				latestHeader, err = ethClt.RPC().HeaderByNumber(context.Background(), nil)
